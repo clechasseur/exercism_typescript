@@ -44,33 +44,50 @@ jobs:
       - name: Run exercism/typescript ci (checks config, lint code, and runs tests) for all exercises
         run: yarn ci
 
-  impersonate:
-    # This job tries to run tests for the 'hello-world' exercise, but
-    # simulating what would happen if a student runs the tests standalone.
-    # We do this by removing all project files in the root.
-
+  make-impersonate-matrix:
     runs-on: ubuntu-22.04
+
+    outputs:
+      matrix-json: ${{ steps.generate-matrix.outputs.MATRIX_JSON }}
 
     steps:
       - uses: actions/checkout@8e5e7e5ab8b370d6c329ec480221332ada57f0ab
-      - name: Use Node.js 20.x
+
+      - name: Generate exercise matrix for impersonate job
+        id: generate-matrix
+        run: |
+          echo "MATRIX_JSON=$(find ./exercises/concept ./exercises/practice -mindepth 1 -maxdepth 1 -type d | sed -E 's/^\.\/exercises\/([^\/]+)\/([^\/]+)$/{"exercise_type":"\1","exercise":"\2"}/' | jq --slurp --compact-output '[.[] | (. + {"node-version": "18.x"}), (. + {"node-version": "20.x"})]')" >> $GITHUB_OUTPUT
+
+  impersonate:
+    runs-on: ubuntu-22.04
+
+    needs:
+      - make-impersonate-matrix
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.make-impersonate-matrix.outputs.matrix-json) }}
+
+    steps:
+      - uses: actions/checkout@8e5e7e5ab8b370d6c329ec480221332ada57f0ab
+      - name: Use Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@64ed1c7eab4cce3362f8c340dee64e5eaeef8f7c
         with:
-          node-version: 20.x
+          node-version: ${{ matrix.node-version }}
 
       - name: Remove root project files
         run: rm -f package.json yarn.lock .yarnrc.yml
 
       - name: Move solution file so that tests pass
-        working-directory: exercises/practice/hello-world
+        working-directory: exercises/${{ matrix.exercise_type }}/${{ matrix.exercise }}
         run: |
-          rm -f hello-world.ts
-          cp ./.meta/proof.ci.ts hello-world.ts
+          rm -f ${{ matrix.exercise }}.ts
+          cp ./.meta/proof.ci.ts ${{ matrix.exercise }}.ts
 
       - name: Install project dependencies
-        working-directory: exercises/practice/hello-world
+        working-directory: exercises/${{ matrix.exercise_type }}/${{ matrix.exercise }}
         run: yarn install --no-immutable
 
       - name: Run tests
-        working-directory: exercises/practice/hello-world
+        working-directory: exercises/${{ matrix.exercise_type }}/${{ matrix.exercise }}
         run: yarn test
